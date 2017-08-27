@@ -1,0 +1,410 @@
+From 31ac008cfa5a455c48249a4e20bfa2f3b19a7bc5 Mon Sep 17 00:00:00 2001
+From: zhangjianming0818 <zjm644276040@163.com>
+Date: Sun, 27 Aug 2017 16:16:30 +0800
+Subject: [PATCH] Description:create a my kernel for linux Project    :linux
+ Author     :zhangjianming modify     :create my kernel feature/bugfix:feature
+
+---
+ Makefile                      |  2 +-
+ arch/x86/kernel/time.c        |  3 ++
+ include/linux/compiler-gcc5.h | 77 +++++++++++++++++++++++++++++++++++++++++
+ include/linux/start_kernel.h  |  1 +
+ include/linux/timer.h         |  2 ++
+ init/main.c                   |  2 +-
+ mykernel/Makefile             |  5 +++
+ mykernel/myinterrupt.c        | 77 +++++++++++++++++++++++++++++++++++++++++
+ mykernel/mymain.c             | 79 +++++++++++++++++++++++++++++++++++++++++++
+ mykernel/mypcb.h              | 30 ++++++++++++++++
+ 10 files changed, 276 insertions(+), 2 deletions(-)
+ create mode 100644 include/linux/compiler-gcc5.h
+ create mode 100644 mykernel/Makefile
+ create mode 100644 mykernel/myinterrupt.c
+ create mode 100644 mykernel/mymain.c
+ create mode 100644 mykernel/mypcb.h
+
+diff --git a/Makefile b/Makefile
+index bfbfaf9..cead503 100644
+--- a/Makefile
++++ b/Makefile
+@@ -733,7 +733,7 @@ export mod_sign_cmd
+ 
+ 
+ ifeq ($(KBUILD_EXTMOD),)
+-core-y		+= kernel/ mm/ fs/ ipc/ security/ crypto/ block/
++core-y		+= kernel/ mm/ fs/ ipc/ security/ crypto/ block/ mykernel/
+ 
+ vmlinux-dirs	:= $(patsubst %/,%,$(filter %/, $(init-y) $(init-m) \
+ 		     $(core-y) $(core-m) $(drivers-y) $(drivers-m) \
+diff --git a/arch/x86/kernel/time.c b/arch/x86/kernel/time.c
+index 24d3c91..0e52a56 100644
+--- a/arch/x86/kernel/time.c
++++ b/arch/x86/kernel/time.c
+@@ -13,6 +13,7 @@
+ #include <linux/interrupt.h>
+ #include <linux/i8253.h>
+ #include <linux/time.h>
++#include <linux/timer.h>
+ #include <linux/export.h>
+ 
+ #include <asm/vsyscall.h>
+@@ -57,6 +58,7 @@ EXPORT_SYMBOL(profile_pc);
+ static irqreturn_t timer_interrupt(int irq, void *dev_id)
+ {
+ 	global_clock_event->event_handler(global_clock_event);
++    my_timer_handler();
+ 	return IRQ_HANDLED;
+ }
+ 
+@@ -68,6 +70,7 @@ static struct irqaction irq0  = {
+ 
+ void __init setup_default_timer_irq(void)
+ {
++    printk(KERN_NOTICE "timer interrupt setup\n"); 
+ 	setup_irq(0, &irq0);
+ }
+ 
+diff --git a/include/linux/compiler-gcc5.h b/include/linux/compiler-gcc5.h
+new file mode 100644
+index 0000000..68b162d
+--- /dev/null
++++ b/include/linux/compiler-gcc5.h
+@@ -0,0 +1,77 @@
++#ifndef __LINUX_COMPILER_H
++#error "Please don't include <linux/compiler-gcc4.h> directly, include <linux/compiler.h> instead."
++#endif
++
++/* GCC 4.1.[01] miscompiles __weak */
++#ifdef __KERNEL__
++# if GCC_VERSION >= 40100 &&  GCC_VERSION <= 40101
++#  error Your version of gcc miscompiles the __weak directive
++# endif
++#endif
++
++#define __used			__attribute__((__used__))
++#define __must_check 		__attribute__((warn_unused_result))
++#define __compiler_offsetof(a,b) __builtin_offsetof(a,b)
++
++#if GCC_VERSION >= 40100
++# define __compiletime_object_size(obj) __builtin_object_size(obj, 0)
++#endif
++
++#if GCC_VERSION >= 40300
++/* Mark functions as cold. gcc will assume any path leading to a call
++   to them will be unlikely.  This means a lot of manual unlikely()s
++   are unnecessary now for any paths leading to the usual suspects
++   like BUG(), printk(), panic() etc. [but let's keep them for now for
++   older compilers]
++
++   Early snapshots of gcc 4.3 don't support this and we can't detect this
++   in the preprocessor, but we can live with this because they're unreleased.
++   Maketime probing would be overkill here.
++
++   gcc also has a __attribute__((__hot__)) to move hot functions into
++   a special section, but I don't see any sense in this right now in
++   the kernel context */
++#define __cold			__attribute__((__cold__))
++
++#define __UNIQUE_ID(prefix) __PASTE(__PASTE(__UNIQUE_ID_, prefix), __COUNTER__)
++
++#ifndef __CHECKER__
++# define __compiletime_warning(message) __attribute__((warning(message)))
++# define __compiletime_error(message) __attribute__((error(message)))
++#endif /* __CHECKER__ */
++#endif /* GCC_VERSION >= 40300 */
++
++#if GCC_VERSION >= 40500
++/*
++ * Mark a position in code as unreachable.  This can be used to
++ * suppress control flow warnings after asm blocks that transfer
++ * control elsewhere.
++ *
++ * Early snapshots of gcc 4.5 don't support this and we can't detect
++ * this in the preprocessor, but we can live with this because they're
++ * unreleased.  Really, we need to have autoconf for the kernel.
++ */
++#define unreachable() __builtin_unreachable()
++
++/* Mark a function definition as prohibited from being cloned. */
++#define __noclone	__attribute__((__noclone__))
++
++#endif /* GCC_VERSION >= 40500 */
++
++#if GCC_VERSION >= 40600
++/*
++ * Tell the optimizer that something else uses this function or variable.
++ */
++#define __visible __attribute__((externally_visible))
++#endif
++
++
++#ifdef CONFIG_ARCH_USE_BUILTIN_BSWAP
++#if GCC_VERSION >= 40400
++#define __HAVE_BUILTIN_BSWAP32__
++#define __HAVE_BUILTIN_BSWAP64__
++#endif
++#if GCC_VERSION >= 40800 || (defined(__powerpc__) && GCC_VERSION >= 40600)
++#define __HAVE_BUILTIN_BSWAP16__
++#endif
++#endif /* CONFIG_ARCH_USE_BUILTIN_BSWAP */
+diff --git a/include/linux/start_kernel.h b/include/linux/start_kernel.h
+index d3e5f27..9004b44 100644
+--- a/include/linux/start_kernel.h
++++ b/include/linux/start_kernel.h
+@@ -8,5 +8,6 @@
+    up something else. */
+ 
+ extern asmlinkage void __init start_kernel(void);
++extern void __init my_start_kernel(void);
+ 
+ #endif /* _LINUX_START_KERNEL_H */
+diff --git a/include/linux/timer.h b/include/linux/timer.h
+index 8c5a197..d22e9c0 100644
+--- a/include/linux/timer.h
++++ b/include/linux/timer.h
+@@ -251,6 +251,8 @@ extern int try_to_del_timer_sync(struct timer_list *timer);
+ 
+ extern void init_timers(void);
+ extern void run_local_timers(void);
++extern void my_timer_handler(void);
++
+ struct hrtimer;
+ extern enum hrtimer_restart it_real_fn(struct hrtimer *);
+ 
+diff --git a/init/main.c b/init/main.c
+index 63534a1..7a0d3a6 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -574,7 +574,6 @@ asmlinkage void __init start_kernel(void)
+ 	console_init();
+ 	if (panic_later)
+ 		panic(panic_later, panic_param);
+-
+ 	lockdep_info();
+ 
+ 	/*
+@@ -641,6 +640,7 @@ asmlinkage void __init start_kernel(void)
+ 
+ 	ftrace_init();
+ 
++    my_start_kernel();
+ 	/* Do the rest non-__init'ed, we're now alive */
+ 	rest_init();
+ }
+diff --git a/mykernel/Makefile b/mykernel/Makefile
+new file mode 100644
+index 0000000..243aa2f
+--- /dev/null
++++ b/mykernel/Makefile
+@@ -0,0 +1,5 @@
++#
++#Makefile for the linux mykernel
++#
++
++obj-y  = mymain.o myinterrupt.o
+diff --git a/mykernel/myinterrupt.c b/mykernel/myinterrupt.c
+new file mode 100644
+index 0000000..7075745
+--- /dev/null
++++ b/mykernel/myinterrupt.c
+@@ -0,0 +1,77 @@
++/*************************************************************************
++	> File Name: myinterrupt.c
++	> Author: 
++	> Mail: 
++	> Created Time: 2017年08月26日 星期六 16时00分08秒
++    > Version     : 
++ ************************************************************************/
++
++#include<linux/types.h>
++#include<linux/string.h>
++#include<linux/tty.h>
++#include<linux/ctype.h>
++#include<linux/vmalloc.h>
++
++#include "mypcb.h"
++
++extern tPCB task[MAX_TASK_NUM];
++extern tPCB *my_current_task;
++extern volatile int my_need_sched;
++volatile int time_count = 0;
++
++
++/*********************************************************
++ * ** interrupt function call by timer interrupt
++ * ** it is runs in the name of current running process
++ * ** so its use kernel stack of curent running process
++ ********************************************************/
++void my_timer_handler(void)
++{
++    //printk("enter timer\n");
++    if(time_count%1000 == 0 && my_need_sched !=1)
++    {
++        printk(KERN_NOTICE ">>>my timer handle here<<< \n");
++        my_need_sched = 1;
++    }
++    time_count ++;
++
++    return;
++}
++
++void my_schedule(void)
++{
++    tPCB* next;
++    tPCB* prev;
++
++    if(my_current_task == NULL || my_current_task->next==NULL)
++    {
++        printk("Pointer is NULL\n");
++        return;
++    }
++    printk(KERN_NOTICE ">>>my_schedule<<< \n");
++
++    /* schedule*/
++    next = my_current_task->next;
++    prev = my_current_task;
++
++    if(next->state == 0) //-1 unrunnable 0 runnable >0 stopped
++    {
++        my_current_task = next;
++        printk(KERN_NOTICE ">>>switch %d to %d<<<\n",prev->pid,next->pid);
++
++        /*actually switch to next process*/
++        asm volatile(
++            "pushl %%esp\n\t"     /*save ebp*/
++            "movl %%esp,%0\n\t"   /*save esp to task thread.sp*/
++            "movl %2,%%esp\n\t"   /*replace esp used next thread.sp*/
++            "movl $1f,%1\n\t"     /*save eip to task thread.ip*/
++            "pushl %3\n\t"
++            "ret\n\t"             /*replace eip*/
++            "1:\t"                /*next process start here*/
++            "popl %%ebp\n\t"
++            :"=m" (prev->thread.sp),"=m" (prev->thread.ip)
++            :"m" (next->thread.sp),"m" (next->thread.ip)
++        );
++    }
++    return;
++}
+diff --git a/mykernel/mymain.c b/mykernel/mymain.c
+new file mode 100644
+index 0000000..559b2b9
+--- /dev/null
++++ b/mykernel/mymain.c
+@@ -0,0 +1,79 @@
++/*************************************************************************
++	> File Name: mymain.c
++	> Author: 
++	> Mail: 
++	> Created Time: 2017年08月26日 星期六 14时59分22秒
++    > Version     :  kernel internal my_start_kernel
++ ************************************************************************/
++
++#include<linux/types.h>
++#include<linux/string.h>
++#include<linux/ctype.h>
++#include<linux/tty.h>
++#include<linux/vmalloc.h>
++
++#include "mypcb.h"            //my process control block
++
++tPCB task[MAX_TASK_NUM];
++tPCB *my_current_task = NULL;
++volatile int my_need_sched = 0;
++
++void my_process(void);
++
++void __init my_start_kernel(void)
++{
++    int pid = 0;
++    int i;
++    /*initialize process 0*/
++    task[0].pid = pid;
++    task[0].state = 0; //-1 unrunnable ,0 runnable ,>0 stopped
++    task[0].task_entry = task[pid].thread.ip = (unsigned long)my_process;
++    task[0].thread.sp = (unsigned long)&task[pid].stack[KERNEL_STACK_SIZE-1];
++    task[0].next = &task[pid];
++
++    /*as fork other process  */
++    for(i=1;i<MAX_TASK_NUM;i++)
++    {
++        memcpy(&task[i],&task[0],sizeof(tPCB));
++        task[i].pid = i;
++        task[i].thread.sp=(unsigned long)(&task[i].stack[KERNEL_STACK_SIZE-1]);
++        task[i].next = task[i-1].next;
++        task[i-1].next = &task[i];       //install task list tail
++    }
++
++    /* start process 0 by task[0]*/
++    pid = 0;
++    my_current_task = &task[0];
++
++    asm volatile(
++        "movl %1,%%esp\n\t"    /*set thread.sp tp esp*/
++        "pushl %1\n\t"         /*push ebp stack base*/
++        "pushl %0\n\t"         /*push thread.ip*/
++        "ret\n\t"              /*pop thread.ip to eip*/
++        :
++        : "c" (task[pid].thread.ip) ,"d" (task[pid].thread.sp)
++          /*input c or d mean %ecx %edx*/
++    );
++}
++
++
++int i =0;
++void my_process(void)
++{
++    while(1)
++    {
++        i++;
++        if(i%10000000 == 0)
++        {
++            printk(KERN_NOTICE "this is process %d -\n",my_current_task->pid);
++            if(my_need_sched == 1)
++            {
++                my_need_sched = 0;
++                my_schedule();
++            }
++           printk(KERN_NOTICE "this is process %d +\n",my_current_task->pid);
++        }
++    }
++}
++
++
+diff --git a/mykernel/mypcb.h b/mykernel/mypcb.h
+new file mode 100644
+index 0000000..75a1604
+--- /dev/null
++++ b/mykernel/mypcb.h
+@@ -0,0 +1,30 @@
++/*************************************************************************
++	> File Name: mypcb.h
++	> Author: 
++	> Mail: 
++	> Created Time: 2017年08月26日 星期六 15时04分35秒
++    > Version     : 
++ ************************************************************************/
++
++#ifndef _MYPCB_H
++#define _MYPCB_H
++#define MAX_TASK_NUM   5
++#define KERNEL_STACK_SIZE 1024*2
++
++/*CPU specific state of task*/
++struct Thread{
++    unsigned long ip;    //program pointer
++    unsigned long sp;    //stack pointer
++};
++
++typedef struct PCB{
++    int pid;
++    volatile long state;      //-1 unrunnable 0 runnabel ,>0 stopped
++    unsigned long stack[KERNEL_STACK_SIZE];
++    struct Thread thread;
++    unsigned long task_entry;
++    struct PCB *next;
++}tPCB;
++
++void my_schedule(void);
++#endif
+-- 
+2.7.4
+
